@@ -19,6 +19,7 @@ const rewire = require('rewire');
 const Promise = require('bluebird');
 const Bignum = require('../../../../../../../src/modules/chain/helpers/bignum');
 const blockVersion = require('../../../../../../../src/modules/chain/logic/block_version');
+const slots = require('../../../../../../../src/modules/chain/helpers/slots');
 
 const BlocksProcess = rewire(
 	'../../../../../../../src/modules/chain/submodules/blocks/process'
@@ -163,6 +164,7 @@ describe('blocks/process', () => {
 		const modulesBlocksStub = {
 			lastReceipt: {
 				update: sinonSandbox.stub(),
+				get: sinonSandbox.stub(),
 			},
 			verify: {
 				processBlock: sinonSandbox.stub(),
@@ -1640,7 +1642,7 @@ describe('blocks/process', () => {
 			done();
 		});
 
-		describe('Client is syncing and not ready to receive block', () => {
+		describe('client is syncing and not ready to receive block', () => {
 			describe('when __private.loaded is false', () => {
 				beforeEach(done => {
 					__private.loaded = false;
@@ -1681,164 +1683,378 @@ describe('blocks/process', () => {
 		});
 
 		describe('client ready to receive block', () => {
-			afterEach(
-				async () => expect(modules.blocks.lastBlock.get.calledOnce).to.be.true
-			);
-
-			describe('when block.previousBlock === lastBlock.id && lastBlock.height + 1 === block.height', () => {
-				beforeEach(done => {
-					__private.receiveBlock = sinonSandbox
-						.stub()
-						.callsArgWith(1, null, true);
-					done();
-				});
-
+			describe('when the received block version is 0', () => {
 				afterEach(
-					async () => expect(__private.receiveBlock.calledOnce).to.be.true
+					async () => expect(modules.blocks.lastBlock.get.calledOnce).to.be.true
 				);
 
-				it('should call __private.receiveBlock', done => {
-					library.sequence.add = function(cb) {
-						const fn = Promise.promisify(cb);
-						fn().then(() => {
-							done();
+				describe('when block.previousBlock === lastBlock.id && lastBlock.height + 1 === block.height', () => {
+					beforeEach(done => {
+						__private.receiveBlock = sinonSandbox
+							.stub()
+							.callsArgWith(1, null, true);
+						done();
+					});
+
+					afterEach(
+						async () => expect(__private.receiveBlock.calledOnce).to.be.true
+					);
+
+					it('should call __private.receiveBlock', done => {
+						library.sequence.add = function(cb) {
+							const fn = Promise.promisify(cb);
+							fn().then(() => {
+								done();
+							});
+						};
+						blocksProcessModule.onReceiveBlock({
+							id: 5,
+							previousBlock: '2',
+							height: 3,
 						});
-					};
-					blocksProcessModule.onReceiveBlock({
+					});
+				});
+
+				describe('when block.previousBlock !== lastBlock.id && lastBlock.height + 1 === block.height', () => {
+					beforeEach(done => {
+						__private.receiveForkOne = sinonSandbox
+							.stub()
+							.callsArgWith(2, null, true);
+						done();
+					});
+
+					afterEach(() => {
+						expect(__private.receiveForkOne.calledOnce).to.be.true;
+						expect(__private.receiveForkOne.args[0][0]).to.deep.equal({
+							id: 5,
+							previousBlock: '3',
+							height: 3,
+						});
+						expect(__private.receiveForkOne.args[0][1]).to.deep.equal({
+							id: '2',
+							height: 2,
+						});
+						return expect(__private.receiveForkOne.args[0][2]).to.be.an(
+							'function'
+						);
+					});
+
+					it('should call __private.receiveForkOne', done => {
+						library.sequence.add = function(cb) {
+							const fn = Promise.promisify(cb);
+							fn().then(() => {
+								done();
+							});
+						};
+						blocksProcessModule.onReceiveBlock({
+							id: 5,
+							previousBlock: '3',
+							height: 3,
+						});
+					});
+				});
+
+				describe('when block.previousBlock === lastBlock.previousBlock && block.height === lastBlock.height && block.id !== lastBlock.id', () => {
+					beforeEach(() => {
+						__private.receiveForkFive = sinonSandbox
+							.stub()
+							.callsArgWith(2, null, true);
+						return modules.blocks.lastBlock.get.returns({
+							id: '2',
+							height: 2,
+							previousBlock: '1',
+						});
+					});
+
+					afterEach(() => {
+						expect(__private.receiveForkFive.calledOnce).to.be.true;
+						expect(__private.receiveForkFive.args[0][0]).to.deep.equal({
+							id: 5,
+							previousBlock: '1',
+							height: 2,
+						});
+						expect(__private.receiveForkFive.args[0][1]).to.deep.equal({
+							id: '2',
+							previousBlock: '1',
+							height: 2,
+						});
+						return expect(__private.receiveForkFive.args[0][2]).to.be.an(
+							'function'
+						);
+					});
+
+					it('should call __private.receiveForkFive', done => {
+						library.sequence.add = function(cb) {
+							const fn = Promise.promisify(cb);
+							fn().then(() => {
+								done();
+							});
+						};
+						blocksProcessModule.onReceiveBlock({
+							id: 5,
+							previousBlock: '1',
+							height: 2,
+						});
+					});
+				});
+
+				describe('when block.id === lastBlock.id', () => {
+					afterEach(done => {
+						expect(loggerStub.debug.args[0][0]).to.equal(
+							'Block already processed'
+						);
+						expect(loggerStub.debug.args[0][1]).to.equal('2');
+						done();
+					});
+
+					it('should log debug message and call a callback', done => {
+						library.sequence.add = function(cb) {
+							const fn = Promise.promisify(cb);
+							fn().then(() => {
+								done();
+							});
+						};
+						blocksProcessModule.onReceiveBlock({
+							id: '2',
+							previousBlock: '1',
+							height: 2,
+						});
+					});
+				});
+
+				describe('when block.id !== lastBlock.id', () => {
+					afterEach(() =>
+						expect(loggerStub.warn.args[0][0]).to.equal(
+							'Discarded block that does not match with current chain: 7 height: 11 round: 1 slot: 544076 generator: a1'
+						)
+					);
+
+					it('should discard block, when it does not match with current chain', done => {
+						library.sequence.add = function(cb) {
+							const fn = Promise.promisify(cb);
+							fn().then(() => {
+								done();
+							});
+						};
+						blocksProcessModule.onReceiveBlock({
+							id: '7',
+							previousBlock: '6',
+							height: 11,
+							timestamp: 5440768,
+							generatorPublicKey: 'a1',
+						});
+					});
+				});
+			});
+
+			describe('when the received block version is 1', () => {
+				it('should call _forkChoice with the received block', async () => {
+					const forkChoiceStub = sinonSandbox.stub(
+						BlocksProcess.prototype,
+						'_forkChoice'
+					);
+
+					const block = {
 						id: 5,
 						previousBlock: '2',
 						height: 3,
-					});
-				});
-			});
-
-			describe('when block.previousBlock !== lastBlock.id && lastBlock.height + 1 === block.height', () => {
-				beforeEach(done => {
-					__private.receiveForkOne = sinonSandbox
-						.stub()
-						.callsArgWith(2, null, true);
-					done();
-				});
-
-				afterEach(() => {
-					expect(__private.receiveForkOne.calledOnce).to.be.true;
-					expect(__private.receiveForkOne.args[0][0]).to.deep.equal({
-						id: 5,
-						previousBlock: '3',
-						height: 3,
-					});
-					expect(__private.receiveForkOne.args[0][1]).to.deep.equal({
-						id: '2',
-						height: 2,
-					});
-					return expect(__private.receiveForkOne.args[0][2]).to.be.an(
-						'function'
-					);
-				});
-
-				it('should call __private.receiveForkOne', done => {
-					library.sequence.add = function(cb) {
-						const fn = Promise.promisify(cb);
-						fn().then(() => {
-							done();
-						});
+						version: 1,
 					};
-					blocksProcessModule.onReceiveBlock({
-						id: 5,
-						previousBlock: '3',
-						height: 3,
-					});
-				});
-			});
 
-			describe('when block.previousBlock === lastBlock.previousBlock && block.height === lastBlock.height && block.id !== lastBlock.id', () => {
-				beforeEach(() => {
-					__private.receiveForkFive = sinonSandbox
-						.stub()
-						.callsArgWith(2, null, true);
-					return modules.blocks.lastBlock.get.returns({
-						id: '2',
-						height: 2,
-						previousBlock: '1',
-					});
+					blocksProcessModule.onReceiveBlock(block);
+					expect(forkChoiceStub).to.be.calledWith(block);
 				});
 
-				afterEach(() => {
-					expect(__private.receiveForkFive.calledOnce).to.be.true;
-					expect(__private.receiveForkFive.args[0][0]).to.deep.equal({
-						id: 5,
-						previousBlock: '1',
-						height: 2,
-					});
-					expect(__private.receiveForkFive.args[0][1]).to.deep.equal({
-						id: '2',
-						previousBlock: '1',
-						height: 2,
-					});
-					return expect(__private.receiveForkFive.args[0][2]).to.be.an(
-						'function'
-					);
-				});
+				describe('_forkChoiceTask', () => {
+					let newBlockReceivedAtSlot;
+					let newBlockForgingTime;
 
-				it('should call __private.receiveForkFive', done => {
-					library.sequence.add = function(cb) {
-						const fn = Promise.promisify(cb);
-						fn().then(() => {
-							done();
+					beforeEach(async () => {
+						newBlockForgingTime = slots.getTime();
+						newBlockReceivedAtSlot = newBlockForgingTime;
+					});
+
+					it('should call _handleSameBlockReceived if lastBlock.id === block.id', async () => {
+						const handleSameBlockReceived = sinonSandbox.stub(
+							BlocksProcess.prototype,
+							'_handleSameBlockReceived'
+						);
+
+						const lastBlock = {
+							id: '1',
+							height: 1,
+							version: 1,
+							timestamp: slots.getTime(Date.now()),
+						};
+
+						modules.blocks.lastBlock.get.returns(lastBlock);
+						modules.blocks.lastReceipt.get.returns(undefined);
+
+						const block = _.cloneDeep(lastBlock);
+
+						await blocksProcessModule._forkChoiceTask(
+							block,
+							newBlockReceivedAtSlot
+						);
+						expect(handleSameBlockReceived).to.be.calledWith(block);
+					});
+
+					it('otherwise it should call _handleGoodBlock if lastBlock.height + 1 === block.height and block.previousBlock === lastBlock.id', async () => {
+						const handleGoodBlockStub = sinonSandbox.stub(
+							BlocksProcess.prototype,
+							'_handleGoodBlock'
+						);
+
+						const lastBlock = {
+							id: '1',
+							height: 1,
+							version: 1,
+							timestamp: slots.getTime(Date.now()),
+						};
+
+						modules.blocks.lastBlock.get.returns(lastBlock);
+						modules.blocks.lastReceipt.get.returns(undefined);
+
+						const block = {
+							id: '2',
+							previousBlock: lastBlock.id,
+							height: lastBlock.height + 1,
+							version: 1,
+						};
+
+						await blocksProcessModule._forkChoiceTask(
+							block,
+							newBlockReceivedAtSlot
+						);
+						expect(handleGoodBlockStub).to.be.calledWith(block);
+					});
+
+					describe('when double forging', () => {
+						it('otherwise it should call _handleDoubleForging if lastBlock.height === block.height && lastBlock.heightPrevoted === block.heightPrevoted && lastBlock.previousBlock === block.previousBlock and lastBlock.generatorPublicKey === block.generatorPublicKey', async () => {
+							const handleDoubleForging = sinonSandbox.stub(
+								BlocksProcess.prototype,
+								'_handleDoubleForging'
+							);
+
+							const lastBlock = {
+								id: '1',
+								height: 1,
+								version: 1,
+								timestamp: slots.getTime(Date.now()),
+								heightPrevoted: 0,
+								previousBlock: 0,
+								generatorPublicKey: 'aGeneratorPublicKey',
+							};
+
+							modules.blocks.lastBlock.get.returns(lastBlock);
+							modules.blocks.lastReceipt.get.returns(undefined);
+
+							const block = _.cloneDeep(lastBlock);
+							block.id = '2';
+
+							await blocksProcessModule._forkChoiceTask(
+								block,
+								newBlockReceivedAtSlot
+							);
+							expect(handleDoubleForging).to.be.calledWith(block);
 						});
-					};
-					blocksProcessModule.onReceiveBlock({
-						id: 5,
-						previousBlock: '1',
-						height: 2,
-					});
-				});
-			});
+						it('otherwise it should call _handleDoubleForgingTieBreak if the forging slot of the last block is smaller than the new block and the last block was not received in the forging slot but the new block has', async () => {
+							const handleDoubleForgingTieBreak = sinonSandbox.stub(
+								BlocksProcess.prototype,
+								'_handleDoubleForgingTieBreak'
+							);
 
-			describe('when block.id === lastBlock.id', () => {
-				afterEach(done => {
-					expect(loggerStub.debug.args[0][0]).to.equal(
-						'Block already processed'
-					);
-					expect(loggerStub.debug.args[0][1]).to.equal('2');
-					done();
-				});
+							const lastBlock = {
+								id: '1',
+								height: 1,
+								version: 1,
+								timestamp: newBlockForgingTime - slots.interval,
+								heightPrevoted: 0,
+								previousBlock: 0,
+								generatorPublicKey: 'aGeneratorPublicKey',
+							};
 
-				it('should log debug message and call a callback', done => {
-					library.sequence.add = function(cb) {
-						const fn = Promise.promisify(cb);
-						fn().then(() => {
-							done();
+							modules.blocks.lastBlock.get.returns(lastBlock);
+							modules.blocks.lastReceipt.get.returns(
+								lastBlock.timestamp + 1000
+							); // To simulate the block was received later in a greater slot than the designated one
+
+							const block = _.cloneDeep(lastBlock);
+							block.id = '2';
+							block.generatorPublicKey = 'anotherGeneratorPublicKey';
+							block.timestamp = newBlockForgingTime; // So the block is received in the same slot it was forged
+
+							await blocksProcessModule._forkChoiceTask(
+								block,
+								newBlockReceivedAtSlot
+							);
+							expect(handleDoubleForgingTieBreak).to.be.calledWith(block);
 						});
-					};
-					blocksProcessModule.onReceiveBlock({
-						id: '2',
-						previousBlock: '1',
-						height: 2,
 					});
-				});
-			});
 
-			describe('when block.id !== lastBlock.id', () => {
-				afterEach(() =>
-					expect(loggerStub.warn.args[0][0]).to.equal(
-						'Discarded block that does not match with current chain: 7 height: 11 round: 1 slot: 544076 generator: a1'
-					)
-				);
+					describe('otherwise it should call _handleMovingToDifferentChain when', () => {
+						it('lastBlock.heightPrevoted < block.heightPrevoted ', async () => {
+							const handleMovingToDifferentChain = sinonSandbox.stub(
+								BlocksProcess.prototype,
+								'_handleMovingToDifferentChain'
+							);
 
-				it('should discard block, when it does not match with current chain', done => {
-					library.sequence.add = function(cb) {
-						const fn = Promise.promisify(cb);
-						fn().then(() => {
-							done();
+							const lastBlock = {
+								id: '1',
+								height: 1,
+								version: 1,
+								timestamp: slots.getTime(Date.now()),
+								heightPrevoted: 0,
+								previousBlock: 0,
+							};
+
+							modules.blocks.lastBlock.get.returns(lastBlock);
+							modules.blocks.lastReceipt.get.returns(undefined);
+
+							const block = _.cloneDeep(lastBlock);
+							block.id = '2';
+							block.heightPrevoted = 1;
+
+							await blocksProcessModule._forkChoiceTask(
+								block,
+								newBlockReceivedAtSlot
+							);
+							expect(handleMovingToDifferentChain).to.be.called;
 						});
-					};
-					blocksProcessModule.onReceiveBlock({
-						id: '7',
-						previousBlock: '6',
-						height: 11,
-						timestamp: 5440768,
-						generatorPublicKey: 'a1',
+
+						it('or lastBlock.height < block.height && lastBlock.heightPrevoted === block.heightPrevoted', async () => {
+							const handleMovingToDifferentChain = sinonSandbox.stub(
+								BlocksProcess.prototype,
+								'_handleMovingToDifferentChain'
+							);
+
+							const lastBlock = {
+								id: '1',
+								height: 1,
+								version: 1,
+								timestamp: slots.getTime(Date.now()),
+								heightPrevoted: 0,
+								previousBlock: 0,
+							};
+
+							modules.blocks.lastBlock.get.returns(lastBlock);
+							modules.blocks.lastReceipt.get.returns(undefined);
+
+							const block = _.cloneDeep(lastBlock);
+							block.id = '2';
+							block.height = lastBlock.height + 1;
+
+							await blocksProcessModule._forkChoiceTask(
+								block,
+								newBlockReceivedAtSlot
+							);
+							expect(handleMovingToDifferentChain).to.be.called;
+						});
+					});
+
+					describe('when no conditions are met', () => {
+						// eslint-disable-next-line mocha/no-pending-tests
+						it('should discard the block and WARN log it ');
 					});
 				});
 			});

@@ -377,7 +377,7 @@ class Process {
 		// New block version, different onReceiveBlock implementation
 		if (block.version === 1) {
 			// TODO: Remove hard coding.
-			return this.forkChoice(block);
+			return this._forkChoice(block);
 		}
 
 		// Execute in sequence via sequence. TODO: Remove after compatibility window is over.
@@ -431,26 +431,6 @@ class Process {
 	}
 
 	/**
-	 * Handle newly received block.
-	 *
-	 * @listens module:transport~event:receiveBlock
-	 * @param {block} block - New block
-	 */
-	// eslint-disable-next-line class-methods-use-this
-	forkChoice(block) {
-		// Current slot number based on current time since LiskEpoch ~ Slot number at the time the new block is received
-		// Better to do it here rather than in the Sequence so reciving time is more accurate
-		const newBlockReceivedAtSlot = slots.getSlotNumber();
-
-		// Execute in sequence via sequence
-		return library.sequence.add(callback => {
-			this._forkChoiceTask(block, newBlockReceivedAtSlot)
-				.then(result => callback(null, result))
-				.catch(error => callback(error));
-		});
-	}
-
-	/**
 	 * Handle modules initialization
 	 * - accounts
 	 * - blocks
@@ -484,22 +464,42 @@ class Process {
 	}
 
 	/**
+	 * Handle newly received block based on the new fork choice rule
+	 *
+	 * @listens module:transport~event:receiveBlock
+	 * @param {block} block - New block
+	 * @private
+	 */
+	// eslint-disable-next-line class-methods-use-this
+	_forkChoice(block) {
+		// Current slot number based on current time since LiskEpoch ~ Slot number at the time the new block is received
+		// Better to do it here rather than in the Sequence so reciving time is more accurate
+		const newBlockReceivedAt = slots.getTime();
+
+		// Execute in sequence via sequence
+		return library.sequence.add(callback => {
+			this._forkChoiceTask(block, newBlockReceivedAt)
+				.then(result => callback(null, result))
+				.catch(error => callback(error));
+		});
+	}
+
+	/**
 	 * Wrap of fork choice rule logic so it can be added to Sequence and properly tested
 	 * @param block
-	 * @param newBlockReceivedAtSlot - Slot number when the block was received
+	 * @param newBlockReceivedAt - Time when the block was received
 	 * @return {Promise}
 	 * @private
 	 */
-	async _forkChoiceTask(block, newBlockReceivedAtSlot) {
+	async _forkChoiceTask(block, newBlockReceivedAt) {
 		const lastBlock = modules.blocks.lastBlock.get();
 
 		const forgingSlotLastBlock = slots.getSlotNumber(lastBlock.timestamp);
 		const forgingSlotNewBlock = slots.getSlotNumber(block.timestamp);
 
 		// Slot number when lastBlock was received.
-		const lastBlockReceivedAtSlot = !modules.blocks.lastReceipt.get()
-			? forgingSlotLastBlock
-			: slots.getTime(modules.blocks.lastReceipt.get() * 1000);
+		const lastBlockReceivedAt =
+			modules.blocks.lastReceipt.get() || lastBlock.timestamp;
 
 		if (lastBlock.id === block.id) {
 			// Case 1: same block received twice
@@ -529,20 +529,19 @@ class Process {
 			// Two competing blocks by different delegates at the same height.
 			if (
 				forgingSlotLastBlock < forgingSlotNewBlock &&
-				!this._receivedInSlot(lastBlock, lastBlockReceivedAtSlot) &&
-				this._receivedInSlot(block, newBlockReceivedAtSlot)
+				!this._receivedInSlot(lastBlock, lastBlockReceivedAt) &&
+				this._receivedInSlot(block, newBlockReceivedAt)
 			) {
 				// Case 4: Tie break
 				return this._handleDoubleForgingTieBreak(block, lastBlock);
 			}
-		}
-
-		// Case 5: received block has priority. Move to a different chain.
-		if (
+		} else if (
 			lastBlock.heightPrevoted < block.heightPrevoted ||
 			(lastBlock.height < block.height &&
 				lastBlock.heightPrevoted === block.heightPrevoted)
 		) {
+			// Case 5: received block has priority. Move to a different chain.
+
 			return this._handleMovingToDifferentChain();
 			// TODO: Move to a different chain
 		}
