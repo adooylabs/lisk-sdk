@@ -16,7 +16,7 @@
 
 module.exports = async ({ ed, schema, components: { storage, logger } }) => {
 	const Block = require('../logic/block.js');
-	const Account = require('../logic/account.js');
+	const Account = require('../rounds/account.js');
 
 	const accountLogic = await new Promise((resolve, reject) => {
 		new Account(storage, schema, logger, (err, object) => {

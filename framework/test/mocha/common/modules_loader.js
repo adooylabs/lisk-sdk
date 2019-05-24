@@ -22,7 +22,7 @@ const { createLoggerComponent } = require('../../../src/components/logger');
 const { ZSchema } = require('../../../src/controller/validator');
 const ed = require('../../../src/modules/chain/helpers/ed');
 const jobsQueue = require('../../../src/modules/chain/helpers/jobs_queue');
-const Account = require('../../../src/modules/chain/logic/account');
+const Account = require('../../../src/modules/chain/rounds/account');
 
 // TODO: Remove this file
 const modulesLoader = new function() {
@@ -224,7 +224,14 @@ const modulesLoader = new function() {
 				},
 			],
 			[
+<<<<<<< HEAD
 				{ account: require('../../../src/modules/chain/logic/account') },
+=======
+				{
+					initTransaction: require('../../../src/modules/chain/logic/init_transaction'),
+				},
+				{ account: require('../../../src/modules/chain/rounds/account') },
+>>>>>>> Move Accounts logic to rounds folder and update imports
 				{ block: require('../../../src/modules/chain/logic/block') },
 			],
 			scope || {},

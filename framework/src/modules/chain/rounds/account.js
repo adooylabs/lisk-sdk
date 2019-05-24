@@ -16,7 +16,7 @@
 
 const _ = require('lodash');
 const Bignum = require('../helpers/bignum');
-const BlockReward = require('./block_reward');
+const BlockReward = require('../logic/block_reward');
 
 // Private fields
 let library;
