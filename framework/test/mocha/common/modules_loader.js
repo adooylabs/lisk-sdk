@@ -224,14 +224,7 @@ const modulesLoader = new function() {
 				},
 			],
 			[
-<<<<<<< HEAD
-				{ account: require('../../../src/modules/chain/logic/account') },
-=======
-				{
-					initTransaction: require('../../../src/modules/chain/logic/init_transaction'),
-				},
 				{ account: require('../../../src/modules/chain/rounds/account') },
->>>>>>> Move Accounts logic to rounds folder and update imports
 				{ block: require('../../../src/modules/chain/logic/block') },
 			],
 			scope || {},
