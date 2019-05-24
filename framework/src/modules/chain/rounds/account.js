@@ -43,7 +43,7 @@ const __private = {};
  * @todo Add description for the params
  */
 class Account {
-	constructor(storage, schema, logger, cb) {
+	constructor(storage, schema, logger) {
 		this.scope = {
 			schema,
 			storage,
@@ -99,8 +99,6 @@ class Account {
 				this.editable.push(field.name);
 			}
 		});
-
-		return setImmediate(cb, null, this);
 	}
 
 	// Public methods
