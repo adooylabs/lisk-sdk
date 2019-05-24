@@ -18,33 +18,48 @@ module.exports = async ({
 	ed,
 	schema,
 	components: { storage, logger },
+	config: {
+		exceptions: {
+			precedent: { bftUpgradeHeight },
+		},
+	},
 	registeredTransactions,
+	config,
+	bus,
 }) => {
 	const InitTransaction = require('../logic/init_transaction.js');
+	const TransactionPool = require('../logic/transaction_pool.js');
 	const processTransactionLogic = require('../logic/process_transaction.js');
-	const Block = require('../logic/block.js');
 	const Account = require('../logic/account.js');
+	const Block = require('../logic/block');
 
 	const accountLogic = await new Promise((resolve, reject) => {
 		new Account(storage, schema, logger, (err, object) => {
 			err ? reject(err) : resolve(object);
 		});
 	});
+	const initTransactionLogic = new InitTransaction({ registeredTransactions });
 
-	const initTransactionLogic = new InitTransaction({
-		registeredTransactions,
-	});
+	const blockLogic = new Block(
+		ed,
+		schema,
+		initTransactionLogic,
+		bftUpgradeHeight
+	);
 
-	const blockLogic = await new Promise((resolve, reject) => {
-		new Block(ed, schema, initTransactionLogic, (err, object) => {
-			err ? reject(err) : resolve(object);
-		});
-	});
+	const transactionPoolLogic = new TransactionPool(
+		config.broadcasts.broadcastInterval,
+		config.broadcasts.releaseLimit,
+		logger,
+		config,
+		bus
+	);
 
 	return {
 		account: accountLogic,
 		initTransaction: initTransactionLogic,
 		processTransaction: processTransactionLogic,
 		block: blockLogic,
+		transactionPool: transactionPoolLogic,
 	};
 };
