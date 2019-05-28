@@ -362,7 +362,16 @@ class Process {
 		// New block version, different onReceiveBlock implementation
 		if (block.version === 1) {
 			// TODO: Remove hard coding.
-			return this._forkChoice(block);
+			// Current slot number based on current time since LiskEpoch ~ Slot number at the time the new block is received
+			// Better to do it here rather than in the Sequence so reciving time is more accurate
+			const newBlockReceivedAt = slots.getTime();
+
+			// Execute in sequence via sequence
+			return library.sequence.add(callback => {
+				this._forkChoiceTask(block, newBlockReceivedAt)
+					.then(result => callback(null, result))
+					.catch(error => callback(error));
+			});
 		}
 
 		// Execute in sequence via sequence. TODO: Remove after compatibility window is over.
@@ -442,81 +451,75 @@ class Process {
 	}
 
 	/**
-	 * Handle newly received block based on the new fork choice rule
-	 *
-	 * @listens module:transport~event:receiveBlock
-	 * @param {block} block - New block
-	 * @private
-	 */
-	// eslint-disable-next-line class-methods-use-this
-	_forkChoice(block) {
-		// Current slot number based on current time since LiskEpoch ~ Slot number at the time the new block is received
-		// Better to do it here rather than in the Sequence so reciving time is more accurate
-		const newBlockReceivedAt = slots.getTime();
-
-		// Execute in sequence via sequence
-		return library.sequence.add(callback => {
-			this._forkChoiceTask(block, newBlockReceivedAt)
-				.then(result => callback(null, result))
-				.catch(error => callback(error));
-		});
-	}
-
-	/**
 	 * Wrap of fork choice rule logic so it can be added to Sequence and properly tested
 	 * @param block
-	 * @param newBlockReceivedAt - Time when the block was received
+	 * @param newBlockReceivedAt - Time when the new block was received since Lisk Epoch
 	 * @return {Promise}
 	 * @private
 	 */
 	async _forkChoiceTask(block, newBlockReceivedAt) {
+		// Cases are numbered following LIP-0014 Fork choice rule.
+		// See: https://github.com/LiskHQ/lips/blob/master/proposals/lip-0014.md#applying-blocks-according-to-fork-choice-rule
+		// Case 2 and 1 have flipped execution order for better readability. Behavior is still the same
 		const lastBlock = modules.blocks.lastBlock.get();
 
-		const forgingSlotLastBlock = slots.getSlotNumber(lastBlock.timestamp);
-		const forgingSlotNewBlock = slots.getSlotNumber(block.timestamp);
+		const lastBlockForgingSlot = slots.getSlotNumber(lastBlock.timestamp);
+		const newBlockForgingSlot = slots.getSlotNumber(block.timestamp);
 
-		// Slot number when lastBlock was received.
+		// Time when lastBlock was received.
+		// FIXME: This is real time and is not based in Lisk's Epoch time in our current implementation.
+		// It can be converted here but a more elegant solution would be to or either do it in .get() or
+		// always compute lastReceipt from Lisk's Epoch when updating its value
 		const lastBlockReceivedAt =
 			modules.blocks.lastReceipt.get() || lastBlock.timestamp;
+
+		if (
+			lastBlock.height + 1 === block.height &&
+			lastBlock.id === block.previousBlock
+		) {
+			// Case 2: correct block received
+			return this._handleGoodBlock(block);
+		}
 
 		if (lastBlock.id === block.id) {
 			// Case 1: same block received twice
 			return this._handleSameBlockReceived(block);
 		}
 
+		const isDuplicateBlock =
+			lastBlock.height === block.height &&
+			lastBlock.prevotedConfirmedUptoHeight ===
+				block.prevotedConfirmedUptoHeight &&
+			lastBlock.previousBlock === block.previousBlock;
+
 		if (
-			lastBlock.height + 1 === block.height &&
-			block.previousBlock === lastBlock.id
+			isDuplicateBlock &&
+			lastBlock.generatorPublicKey === block.generatorPublicKey
 		) {
-			// Case 2: correct block received
-			return this._handleGoodBlock(block);
+			// Delegates are the same
+			// Case 3: double forging different blocks in the same slot.
+			// Last Block stands.
+			return this._handleDoubleForging(block, lastBlock);
 		}
 
 		if (
-			lastBlock.height === block.height &&
-			lastBlock.heightPrevoted === block.heightPrevoted &&
-			lastBlock.previousBlock === block.previousBlock
+			isDuplicateBlock &&
+			lastBlockForgingSlot < newBlockForgingSlot &&
+			!this._receivedInSlot(lastBlock, lastBlockReceivedAt) &&
+			this._receivedInSlot(block, newBlockReceivedAt)
 		) {
-			// Delegates are the same
-			if (lastBlock.generatorPublicKey === block.generatorPublicKey) {
-				// Case 3: double forging different blocks in the same slot.
-				// Last Block stands.
-				return this._handleDoubleForging(block);
-			}
-
 			// Two competing blocks by different delegates at the same height.
-			if (
-				forgingSlotLastBlock < forgingSlotNewBlock &&
-				!this._receivedInSlot(lastBlock, lastBlockReceivedAt) &&
-				this._receivedInSlot(block, newBlockReceivedAt)
-			) {
-				// Case 4: Tie break
-				return this._handleDoubleForgingTieBreak(block, lastBlock);
-			}
-		} else if (
-			lastBlock.heightPrevoted < block.heightPrevoted ||
+			// Case 4: Tie break
+			return this._handleDoubleForgingTieBreak(block, lastBlock);
+		}
+
+		if (
+			(!isDuplicateBlock &&
+				lastBlock.prevotedConfirmedUptoHeight <
+					block.prevotedConfirmedUptoHeight) ||
 			(lastBlock.height < block.height &&
-				lastBlock.heightPrevoted === block.heightPrevoted)
+				lastBlock.prevotedConfirmedUptoHeight ===
+					block.prevotedConfirmedUptoHeight)
 		) {
 			// Case 5: received block has priority. Move to a different chain.
 
@@ -560,16 +563,19 @@ class Process {
 	/**
 	 * Double forging. Last block stands
 	 * @param block
+	 * @param lastBlock
 	 * @returns {*}
 	 * @private
 	 */
 	// eslint-disable-next-line class-methods-use-this
-	_handleDoubleForging(block) {
+	_handleDoubleForging(block, lastBlock) {
 		library.logger.warn(
 			'Delegate forging on multiple nodes',
 			block.generatorPublicKey
 		);
-		library.logger.info('Last block stands');
+		library.logger.info(
+			`Last block ${lastBlock.id} stands, new block ${block.id} is discarded`
+		);
 		// TODO: Implement Proof of Misbehavior
 	}
 
@@ -613,11 +619,15 @@ class Process {
 		}
 
 		// If the new block is correctly validated and verified,
-		// last bloc kis deleted and new block is added to the tip chain
+		// last block is deleted and new block is added to the tip chain
 		library.logger.info('Deleting last block due to case 4');
 		await deleteLastBlock();
 
-		return this._processBlock(newBlock);
+		try {
+			this._processBlock(newBlock);
+		} catch (e) {
+			// Restore previous block.
+		}
 	}
 
 	/**
@@ -636,7 +646,8 @@ class Process {
 	 */
 	// eslint-disable-next-line class-methods-use-this
 	_processBlock(block) {
-		return promisify(__private.receiveBlock)(block); // TODO: Convert __private.receiveBlock to async, move implementation here to async and remove from __private.
+		// TODO: Convert __private.receiveBlock to async, move implementation here to async and remove from __private.
+		return __private.receiveBlockPromisified(block);
 	}
 
 	/**
@@ -693,6 +704,9 @@ __private.receiveBlock = function(block, cb) {
 	// Start block processing - broadcast: true, saveBlock: true
 	modules.blocks.verify.processBlock(block, true, true, cb);
 };
+
+// TODO: Remove when `receiveBlock` is converted to async
+__private.receiveBlockPromisified = promisify(__private.receiveBlock);
 
 /**
  * Receive block detected as fork cause 1: Consecutive height but different previous block id.
